@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Course System</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="container">
+
+    <h1>📚 Course Registration System</h1>
+
+    <div id="msg"></div>
+
+    <!-- GRID -->
+    <div class="grid">
+
+        <!-- REGISTER -->
+        <div class="card">
+            <h2>Create Student</h2>
+            <input id="name" placeholder="Name">
+            <input id="email" placeholder="Email">
+            <button onclick="addStudent()">Create</button>
+        </div>
+
+        <div class="card">
+            <h2>Register</h2>
+
+            <select id="studentSelect"></select>
+            <select id="courseSelect"></select>
+
+        <button onclick="register()">Register</button>
+        </div>
+
+        <!-- DROP -->
+        <div class="card">
+            <h2>Drop</h2>
+            <select id="dropStudent"></select>
+            <select id="dropCourse"></select>
+            <button class="danger" onclick="dropCourse()">Drop</button>
+        </div>
+
+    </div>
+
+    <!-- COURSES -->
+    <div class="card">
+        <h2>Courses</h2>
+        <button onclick="loadCourses()">Load Courses</button>
+        <ul id="courses"></ul>
+    </div>
+
+    <!-- DATA -->
+    <div class="grid">
+
+        <div class="card">
+            <h2>Registrations</h2>
+            <button onclick="loadRegistrations()">Refresh</button>
+            <ul id="list"></ul>
+        </div>
+
+        <div class="card">
+            <h2>Waitlist</h2>
+            <button onclick="loadWaitlist()">Refresh</button>
+            <ul id="waitlist"></ul>
+        </div>
+
+    </div>
+
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>

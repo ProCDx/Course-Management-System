@@ -1,0 +1,104 @@
+body {
+    font-family: 'Segoe UI', sans-serif;
+    background: linear-gradient(135deg, #eef2f7, #dfe9f3);
+    margin: 0;
+}
+
+.container {
+    width: 55%;
+    margin: auto;
+    margin-top: 40px;
+}
+
+h1 {
+    text-align: center;
+    margin-bottom: 30px;
+}
+
+.card {
+    background: white;
+    padding: 20px;
+    margin-bottom: 25px;
+    border-radius: 12px;
+    box-shadow: 0 8px 20px rgba(0,0,0,0.08);
+    transition: 0.2s;
+}
+
+.card:hover {
+    transform: translateY(-3px);
+}
+
+input {
+    padding: 12px;
+    margin: 8px 5px;
+    width: 38%;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    outline: none;
+}
+
+input:focus {
+    border-color: #007bff;
+}
+
+button {
+    padding: 10px 18px;
+    margin: 5px;
+    border: none;
+    background: #007bff;
+    color: white;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: 0.2s;
+}
+
+button:hover {
+    background: #0056b3;
+}
+
+button.danger {
+    background: #e63946;
+}
+
+button.danger:hover {
+    background: #b71c2b;
+}
+
+ul {
+    list-style: none;
+    padding: 0;
+}
+
+li {
+    background: #f8f9fa;
+    margin: 6px 0;
+    padding: 10px;
+    border-radius: 6px;
+    border-left: 4px solid #007bff;
+    font-size: 14px;
+}
+
+h2 {
+    margin-bottom: 10px;
+}
+
+h3 {
+    margin-top: 15px;
+}
+
+.grid {
+    display: flex;
+    gap: 20px;
+}
+
+.grid .card {
+    flex: 1;
+}
+
+#msg {
+    text-align: center;
+    margin-bottom: 15px;
+    font-weight: bold;
+    color: #2a9d8f;
+}
