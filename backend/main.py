@@ -1,3 +1,5 @@
+import os
+
 from fastapi import FastAPI, Form
 from pydantic import BaseModel
 from database import get_db
@@ -5,13 +7,21 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-# CORS
+# CORS: only the local frontend may call the API from a browser.
+# No cookies/auth headers are used, so allow_credentials stays off.
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS", "http://localhost:5500,http://127.0.0.1:5500"
+    ).split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=CORS_ORIGINS,
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Content-Type"],
 )
 
 # ------------------ MODELS ------------------
