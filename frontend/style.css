@@ -102,3 +102,7 @@ h3 {
     font-weight: bold;
     color: #2a9d8f;
 }
+
+#msg.error {
+    color: #e63946;
+}

@@ -1,0 +1,13 @@
+# Secrets
+.env
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+
+# Test cache
+.pytest_cache/

@@ -1,0 +1,63 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.14"]
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: course_system_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+
+    # The API (started by the tests) reads its settings from these.
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: "3306"
+      DB_USER: course_app
+      DB_PASSWORD: ci-only-password
+      DB_NAME: course_system_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements-dev.txt
+            backend/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: python -m pyflakes backend tests
+
+      - name: Load schema and create a least-privilege app user
+        run: |
+          mysql -h 127.0.0.1 -uroot -proot course_system_test < backend/schema.sql
+          mysql -h 127.0.0.1 -uroot -proot -e "
+            CREATE USER 'course_app'@'%' IDENTIFIED BY 'ci-only-password';
+            GRANT SELECT, INSERT, UPDATE, DELETE ON course_system_test.* TO 'course_app'@'%';"
+
+      - name: Run tests
+        run: pytest -v

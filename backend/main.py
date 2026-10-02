@@ -1,209 +1,70 @@
-from fastapi import FastAPI, Form
-from pydantic import BaseModel
-from database import get_db
+import logging
+
+import mysql.connector
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from mysql.connector import errorcode
+
+from config import CORS_ORIGINS
+from routes import courses, registration, students, waitlist
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# CORS
+# CORS: only the local frontend may call the API from a browser.
+# No cookies/auth headers are used, so allow_credentials stays off.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=CORS_ORIGINS,
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Content-Type"],
 )
 
-# ------------------ MODELS ------------------
-class Data(BaseModel):
-    student_id: int
-    course_id: int
-    semester_id: int = 1
+# No URL prefixes: every path stays exactly as the frontend calls it.
+app.include_router(students.router)
+app.include_router(courses.router)
+app.include_router(registration.router)
+app.include_router(waitlist.router)
 
 
-# ------------------ STUDENTS ------------------
-@app.post("/add-student")
-def add_student(name: str = Form(...), email: str = Form(...)):
-    db = get_db()
-    cursor = db.cursor()
+# ------------------ ERROR HANDLING ------------------
+# Every error response has the same shape: {"detail": "<message>"}.
+# HTTPException (404/409/400 raised by endpoints) already produces it.
 
-    cursor.execute("""
-        INSERT INTO STUDENT (student_name, email, department_id)
-        VALUES (%s, %s, 1)
-    """, (name, email))
-
-    db.commit()
-    cursor.close()
-    db.close()
-
-    return {"message": "Student Created"}
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError):
+    # FastAPI's default is 422 with a list of error objects. Return one
+    # readable 400 message instead so the frontend can show it as-is.
+    error = exc.errors()[0]
+    field = ".".join(str(part) for part in error["loc"] if part != "body") or "request body"
+    return JSONResponse(status_code=400, content={"detail": f"Invalid {field}: {error['msg']}"})
 
 
-@app.get("/students")
-def get_students():
-    db = get_db()
-    cursor = db.cursor(dictionary=True)
-
-    cursor.execute("SELECT student_id, student_name FROM STUDENT")
-    data = cursor.fetchall()
-
-    cursor.close()
-    db.close()
-
-    return data
+@app.exception_handler(mysql.connector.IntegrityError)
+async def integrity_error_handler(request: Request, exc: mysql.connector.IntegrityError):
+    if exc.errno == errorcode.ER_DUP_ENTRY:
+        return JSONResponse(status_code=409, content={"detail": "This record already exists"})
+    if exc.errno == errorcode.ER_NO_REFERENCED_ROW_2:
+        return JSONResponse(status_code=400, content={"detail": "A referenced record does not exist"})
+    return JSONResponse(status_code=400, content={"detail": "Invalid data"})
 
 
-# ------------------ REGISTER ------------------
-@app.post("/register")
-def register(data: Data):
-    db = get_db()
-    cursor = db.cursor()
-
-    # get capacity
-    cursor.execute("SELECT capacity FROM COURSE WHERE course_id = %s", (data.course_id,))
-    result = cursor.fetchone()
-
-    if not result:
-        return {"message": "Course not found"}
-
-    capacity = result[0]
-
-    # count registered
-    cursor.execute("SELECT COUNT(*) FROM REGISTRATION WHERE course_id = %s", (data.course_id,))
-    count = cursor.fetchone()[0]
-
-    if count < capacity:
-        cursor.execute("""
-            INSERT INTO REGISTRATION (student_id, course_id, semester_id, status)
-            VALUES (%s, %s, %s, 'Registered')
-        """, (data.student_id, data.course_id, data.semester_id))
-        db.commit()
-
-        cursor.close()
-        db.close()
-
-        return {"message": "Registered"}
-
-    else:
-        # waitlist
-        cursor.execute("SELECT COUNT(*) FROM WAITLIST WHERE course_id = %s", (data.course_id,))
-        position = cursor.fetchone()[0] + 1
-
-        cursor.execute("""
-            INSERT INTO WAITLIST (student_id, course_id, semester_id, position)
-            VALUES (%s, %s, %s, %s)
-        """, (data.student_id, data.course_id, data.semester_id, position))
-
-        db.commit()
-        cursor.close()
-        db.close()
-
-        return {"message": "Added to Waitlist"}
+TRANSIENT_DB_ERRORS = {errorcode.ER_LOCK_WAIT_TIMEOUT, errorcode.ER_LOCK_DEADLOCK}
 
 
-# ------------------ GET DATA ------------------
-@app.get("/registrations")
-def get_registrations():
-    db = get_db()
-    cursor = db.cursor(dictionary=True)
-
-    cursor.execute("""
-        SELECT r.registration_id,
-               s.student_name,
-               c.course_name,
-               r.status
-        FROM REGISTRATION r
-        JOIN STUDENT s ON r.student_id = s.student_id
-        JOIN COURSE c ON r.course_id = c.course_id
-    """)
-
-    data = cursor.fetchall()
-    cursor.close()
-    db.close()
-    return data
-
-
-@app.get("/courses")
-def get_courses():
-    db = get_db()
-    cursor = db.cursor(dictionary=True)
-
-    cursor.execute("SELECT * FROM COURSE")
-    data = cursor.fetchall()
-
-    cursor.close()
-    db.close()
-    return data
-
-
-@app.get("/waitlist")
-def get_waitlist():
-    db = get_db()
-    cursor = db.cursor(dictionary=True)
-
-    cursor.execute("""
-        SELECT s.student_name,
-               c.course_name,
-               w.position
-        FROM WAITLIST w
-        JOIN STUDENT s ON w.student_id = s.student_id
-        JOIN COURSE c ON w.course_id = c.course_id
-    """)
-
-    data = cursor.fetchall()
-    cursor.close()
-    db.close()
-    return data
-
-
-# ------------------ DROP ------------------
-@app.delete("/drop")
-def drop(data: Data):
-    db = get_db()
-    cursor = db.cursor()
-
-    # remove from registration
-    cursor.execute("""
-        DELETE FROM REGISTRATION
-        WHERE student_id = %s AND course_id = %s
-    """, (data.student_id, data.course_id))
-
-    # get next waitlist
-    cursor.execute("""
-        SELECT student_id, semester_id FROM WAITLIST
-        WHERE course_id = %s
-        ORDER BY position ASC
-        LIMIT 1
-    """, (data.course_id,))
-
-    next_student = cursor.fetchone()
-
-    if next_student:
-        sid, sem = next_student
-
-        # promote
-        cursor.execute("""
-            INSERT INTO REGISTRATION (student_id, course_id, semester_id, status)
-            VALUES (%s, %s, %s, 'Registered')
-        """, (sid, data.course_id, sem))
-
-        # remove from waitlist
-        cursor.execute("""
-            DELETE FROM WAITLIST
-            WHERE student_id = %s AND course_id = %s
-        """, (sid, data.course_id))
-
-        # reorder waitlist
-        cursor.execute("SET @pos = 0")
-        cursor.execute("""
-            UPDATE WAITLIST
-            SET position = (@pos := @pos + 1)
-            WHERE course_id = %s
-            ORDER BY position
-        """, (data.course_id,))
-
-    db.commit()
-    cursor.close()
-    db.close()
-
-    return {"message": "Dropped + Waitlist Updated"}
+@app.exception_handler(mysql.connector.Error)
+async def database_error_handler(request: Request, exc: mysql.connector.Error):
+    # Log the real error server-side; never send SQL details to the client.
+    logger.error("Database error on %s %s: %s", request.method, request.url.path, exc)
+    if (
+        isinstance(exc, (mysql.connector.InterfaceError, mysql.connector.OperationalError))
+        or exc.errno in TRANSIENT_DB_ERRORS
+    ):
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Database is unavailable or busy, please try again"},
+        )
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
