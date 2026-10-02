@@ -5,18 +5,20 @@ from database import get_db
 router = APIRouter(tags=["waitlist"])
 
 
-def remove_from_waitlist(cursor, student_id, course_id, position):
-    """Delete one waitlist entry and move everyone behind it up one place."""
-    cursor.execute("""
-        DELETE FROM WAITLIST
-        WHERE student_id = %s AND course_id = %s
-    """, (student_id, course_id))
+def close_waitlist_gap(cursor, course_id, semester_id, position):
+    """Move every waitlisted student behind `position` up one place.
 
+    ORDER BY is required: MySQL checks the UNIQUE (course_id, semester_id,
+    position) key row by row, so rows must move front-to-back or 3 -> 2
+    would collide with the 2 that hasn't moved yet.
+    """
     cursor.execute("""
-        UPDATE WAITLIST
+        UPDATE ENROLLMENT
         SET position = position - 1
-        WHERE course_id = %s AND position > %s
-    """, (course_id, position))
+        WHERE course_id = %s AND semester_id = %s
+          AND status = 'Waitlisted' AND position > %s
+        ORDER BY position
+    """, (course_id, semester_id, position))
 
 
 @router.get("/waitlist")
@@ -26,10 +28,12 @@ def get_waitlist(db=Depends(get_db)):
     cursor.execute("""
         SELECT s.student_name,
                c.course_name,
-               w.position
-        FROM WAITLIST w
-        JOIN STUDENT s ON w.student_id = s.student_id
-        JOIN COURSE c ON w.course_id = c.course_id
+               e.position
+        FROM ENROLLMENT e
+        JOIN STUDENT s ON e.student_id = s.student_id
+        JOIN COURSE c ON e.course_id = c.course_id
+        WHERE e.status = 'Waitlisted'
+        ORDER BY c.course_name, e.semester_id, e.position
     """)
 
     return cursor.fetchall()

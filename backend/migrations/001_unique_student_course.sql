@@ -1,3 +1,7 @@
+-- SUPERSEDED by 002_enrollment.sql, which replaces REGISTRATION and
+-- WAITLIST with one ENROLLMENT table. You do not need to run this file;
+-- it is kept as history (it is harmless if you already ran it).
+--
 -- Migration 001: a student can appear at most once per course in
 -- REGISTRATION and at most once per course in WAITLIST.
 --
