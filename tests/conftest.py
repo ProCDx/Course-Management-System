@@ -11,12 +11,13 @@ dedicated test database, e.g.:
 Every test creates its own uniquely named courses and students and deletes
 them afterwards, so the seed data is never touched.
 """
+import os
 import socket
 import subprocess
 import sys
 import time
 import uuid
-from contextlib import closing
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 import httpx
@@ -34,22 +35,26 @@ def _free_port():
         return s.getsockname()[1]
 
 
-@pytest.fixture(scope="session")
-def api_url():
-    """Run the real API in its own uvicorn process for the whole test session."""
+@contextmanager
+def running_api(extra_env=None, ready_status=200):
+    """Run the real API in its own uvicorn process; yield its base URL.
+
+    Waits until GET /courses returns `ready_status`. With the default 200
+    that means the API is up AND can reach MySQL.
+    """
     port = _free_port()
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "main:app", "--port", str(port)],
         cwd=BACKEND,
+        env={**os.environ, **(extra_env or {})},
     )
     url = f"http://127.0.0.1:{port}"
 
     try:
-        # /courses only returns 200 once the API is up AND can reach MySQL
         deadline = time.time() + 20
         while True:
             try:
-                if httpx.get(f"{url}/courses").status_code == 200:
+                if httpx.get(f"{url}/courses").status_code == ready_status:
                     break
             except httpx.TransportError:
                 pass
@@ -64,6 +69,20 @@ def api_url():
     finally:
         proc.terminate()
         proc.wait(timeout=10)
+
+
+@pytest.fixture(scope="session")
+def api_url():
+    """One API server shared by the whole test session."""
+    with running_api() as url:
+        yield url
+
+
+@pytest.fixture
+def api_url_without_db():
+    """An API server whose database is unreachable (nothing listens on DB_PORT)."""
+    with running_api({"DB_PORT": str(_free_port())}, ready_status=503) as url:
+        yield url
 
 
 class Factory:
@@ -98,6 +117,19 @@ class Factory:
             db.commit()
         self.student_ids.extend(ids)
         return ids
+
+    def track_student(self, student_id):
+        """Delete a student created through the API during cleanup too."""
+        self.student_ids.append(student_id)
+
+    def insert_enrollment(self, student_id, course_id, status, position=None):
+        """Write an ENROLLMENT row directly, bypassing the API's rules."""
+        with closing(get_connection()) as db:
+            db.cursor().execute("""
+                INSERT INTO ENROLLMENT (student_id, course_id, semester_id, status, position)
+                VALUES (%s, %s, 1, %s, %s)
+            """, (student_id, course_id, status, position))
+            db.commit()
 
     def enrollment(self, course_id, semester_id=1):
         """Return (registered student ids, [(student id, position), ...] in queue order)."""
