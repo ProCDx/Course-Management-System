@@ -1,6 +1,8 @@
 import os
 
-from fastapi import FastAPI, Form
+import mysql.connector
+from fastapi import FastAPI, Form, HTTPException
+from mysql.connector import errorcode
 from pydantic import BaseModel
 from database import get_db
 from fastapi.middleware.cors import CORSMiddleware
@@ -69,46 +71,90 @@ def register(data: Data):
     db = get_db()
     cursor = db.cursor()
 
-    # get capacity
-    cursor.execute("SELECT capacity FROM COURSE WHERE course_id = %s", (data.course_id,))
-    result = cursor.fetchone()
+    try:
+        # One transaction for the whole check-then-insert flow.
+        # READ COMMITTED: every read below sees rows committed by whoever
+        # held the course lock before us (no stale MVCC snapshot).
+        db.start_transaction(isolation_level="READ COMMITTED")
 
-    if not result:
-        return {"message": "Course not found"}
+        # Lock the course row. Concurrent registrations for the same course
+        # block here and run one at a time until we commit or roll back.
+        cursor.execute(
+            "SELECT capacity FROM COURSE WHERE course_id = %s FOR UPDATE",
+            (data.course_id,),
+        )
+        result = cursor.fetchone()
 
-    capacity = result[0]
+        if not result:
+            raise HTTPException(status_code=404, detail="Course not found")
 
-    # count registered
-    cursor.execute("SELECT COUNT(*) FROM REGISTRATION WHERE course_id = %s", (data.course_id,))
-    count = cursor.fetchone()[0]
+        capacity = result[0]
 
-    if count < capacity:
+        # reject duplicates
         cursor.execute("""
-            INSERT INTO REGISTRATION (student_id, course_id, semester_id, status)
-            VALUES (%s, %s, %s, 'Registered')
-        """, (data.student_id, data.course_id, data.semester_id))
-        db.commit()
+            SELECT COUNT(*) FROM REGISTRATION
+            WHERE student_id = %s AND course_id = %s
+        """, (data.student_id, data.course_id))
+        if cursor.fetchone()[0] > 0:
+            raise HTTPException(
+                status_code=409,
+                detail="Student is already registered for this course",
+            )
 
-        cursor.close()
-        db.close()
+        cursor.execute("""
+            SELECT COUNT(*) FROM WAITLIST
+            WHERE student_id = %s AND course_id = %s
+        """, (data.student_id, data.course_id))
+        if cursor.fetchone()[0] > 0:
+            raise HTTPException(
+                status_code=409,
+                detail="Student is already on the waitlist for this course",
+            )
 
-        return {"message": "Registered"}
+        # count registered
+        cursor.execute("SELECT COUNT(*) FROM REGISTRATION WHERE course_id = %s", (data.course_id,))
+        count = cursor.fetchone()[0]
 
-    else:
+        if count < capacity:
+            cursor.execute("""
+                INSERT INTO REGISTRATION (student_id, course_id, semester_id, status)
+                VALUES (%s, %s, %s, 'Registered')
+            """, (data.student_id, data.course_id, data.semester_id))
+            db.commit()
+
+            return {"message": "Registered"}
+
         # waitlist
-        cursor.execute("SELECT COUNT(*) FROM WAITLIST WHERE course_id = %s", (data.course_id,))
-        position = cursor.fetchone()[0] + 1
+        cursor.execute(
+            "SELECT COALESCE(MAX(position), 0) + 1 FROM WAITLIST WHERE course_id = %s",
+            (data.course_id,),
+        )
+        position = cursor.fetchone()[0]
 
         cursor.execute("""
             INSERT INTO WAITLIST (student_id, course_id, semester_id, position)
             VALUES (%s, %s, %s, %s)
         """, (data.student_id, data.course_id, data.semester_id, position))
-
         db.commit()
+
+        return {"message": "Added to Waitlist", "position": position}
+
+    except mysql.connector.IntegrityError as e:
+        # Second line of defence: UNIQUE (student_id, course_id) rejected it.
+        db.rollback()
+        if e.errno == errorcode.ER_DUP_ENTRY:
+            raise HTTPException(
+                status_code=409,
+                detail="Student is already registered or waitlisted for this course",
+            )
+        raise
+    except Exception:
+        # Rolling back also releases the course row lock.
+        db.rollback()
+        raise
+    finally:
         cursor.close()
         db.close()
-
-        return {"message": "Added to Waitlist"}
 
 
 # ------------------ GET DATA ------------------
