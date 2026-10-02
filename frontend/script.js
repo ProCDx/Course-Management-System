@@ -1,10 +1,33 @@
 const API = "http://127.0.0.1:8000";
 
+// Calls the API and returns the parsed JSON body.
+// For error responses it throws an Error carrying the server's
+// {"detail": "..."} message so the caller can show it to the user.
+async function api(path, options = {}) {
+    let res;
+    try {
+        res = await fetch(`${API}${path}`, options);
+    } catch (err) {
+        throw new Error("Cannot reach the server. Is the backend running?");
+    }
+
+    let data = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+        throw new Error(data.detail || `Request failed (${res.status})`);
+    }
+    return data;
+}
+
+function showError(err) {
+    showMsg(err.message, true);
+}
+
 async function register() {
     let student = document.getElementById("studentSelect").value;
     let course = document.getElementById("courseSelect").value;
 
-    let res = await fetch(`${API}/register`, {
+    let data = await api("/register", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
@@ -12,10 +35,9 @@ async function register() {
             course_id: parseInt(course),
             semester_id: 1
         })
-    });
+    }).catch(showError);
 
-    let data = await res.json();
-    showMsg(data.message);
+    if (data) showMsg(data.message);
 
     loadRegistrations();
     loadWaitlist();
@@ -23,8 +45,8 @@ async function register() {
 
 // LOAD REGISTRATIONS
 async function loadRegistrations() {
-    let res = await fetch(`${API}/registrations`);
-    let data = await res.json();
+    let data = await api("/registrations").catch(showError);
+    if (!data) return;
 
     let list = document.getElementById("list");
     list.innerHTML = "";
@@ -38,8 +60,8 @@ async function loadRegistrations() {
 
 // LOAD WAITLIST
 async function loadWaitlist() {
-    let res = await fetch(`${API}/waitlist`);
-    let data = await res.json();
+    let data = await api("/waitlist").catch(showError);
+    if (!data) return;
 
     let list = document.getElementById("waitlist");
     list.innerHTML = "";
@@ -55,7 +77,7 @@ async function dropCourse() {
     let student = document.getElementById("dropStudent").value;
 let course = document.getElementById("dropCourse").value;
 
-    let res = await fetch(`${API}/drop`, {
+    let data = await api("/drop", {
         method: "DELETE",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
@@ -63,22 +85,23 @@ let course = document.getElementById("dropCourse").value;
             course_id: parseInt(course),
             semester_id: 1
         })
-    });
+    }).catch(showError);
 
-    let data = await res.json();
-    showMsg(data.message);
+    if (data) showMsg(data.message);
 
     loadRegistrations();
     loadWaitlist();
 }
 
-function showMsg(text) {
-    document.getElementById("msg").innerText = text;
+function showMsg(text, isError = false) {
+    let msg = document.getElementById("msg");
+    msg.innerText = text;
+    msg.classList.toggle("error", isError);
 }
 
 async function loadCourses() {
-    let res = await fetch(`${API}/courses`);
-    let data = await res.json();
+    let data = await api("/courses").catch(showError);
+    if (!data) return;
 
     let list = document.getElementById("courses");
     list.innerHTML = "";
@@ -98,19 +121,18 @@ async function addStudent() {
     formData.append("name", name);
     formData.append("email", email);
 
-    let res = await fetch(`${API}/add-student`, {
+    let data = await api("/add-student", {
         method: "POST",
         body: formData
-    });
+    }).catch(showError);
 
-    let data = await res.json();
-    showMsg(data.message);
+    if (data) showMsg(data.message);
 
     loadStudents();
 }
 async function loadStudents() {
-    let res = await fetch(`${API}/students`);
-    let data = await res.json();
+    let data = await api("/students").catch(showError);
+    if (!data) return;
 
     console.log("STUDENTS:", data); // 👈 IMPORTANT
 
@@ -127,8 +149,8 @@ async function loadStudents() {
     document.getElementById("studentSelect").innerHTML;
 }
 async function loadCoursesDropdown() {
-    let res = await fetch(`${API}/courses`);
-    let data = await res.json();
+    let data = await api("/courses").catch(showError);
+    if (!data) return;
 
     let select = document.getElementById("courseSelect");
     select.innerHTML = "";
@@ -148,34 +170,4 @@ window.onload = () => {
     loadCoursesDropdown();
     loadRegistrations();
     loadWaitlist();
-};
-//DEBUG
-loadStudents();
-loadCoursesDropdown();
-async function loadStudents() {
-    let res = await fetch(`${API}/students`);
-    let data = await res.json();
-
-    console.log("STUDENTS:", data);  // 👈 ADD THIS
-
-    let select = document.getElementById("studentSelect");
-    select.innerHTML = "";
-
-    data.forEach(s => {
-        let opt = document.createElement("option");
-        opt.value = s.student_id;
-        opt.text = s.student_name;
-        select.appendChild(opt);
-    });
-}
-
-window.location.href = "dashboard.html";
-
-localStorage.setItem("student_id", selectedId);
-
-let student = localStorage.getItem("student_id");
-
-window.onload = () => {
-    loadStudents();
-    loadCoursesDropdown();
 };
