@@ -218,48 +218,84 @@ def drop(data: Data):
     db = get_db()
     cursor = db.cursor()
 
-    # remove from registration
-    cursor.execute("""
-        DELETE FROM REGISTRATION
-        WHERE student_id = %s AND course_id = %s
-    """, (data.student_id, data.course_id))
+    try:
+        # delete + promote + reorder succeed or fail together
+        db.start_transaction(isolation_level="READ COMMITTED")
 
-    # get next waitlist
-    cursor.execute("""
-        SELECT student_id, semester_id FROM WAITLIST
-        WHERE course_id = %s
-        ORDER BY position ASC
-        LIMIT 1
-    """, (data.course_id,))
+        # Lock the course row first, same as /register, so a drop and a
+        # register for the same course can't interleave (and both endpoints
+        # take locks in the same order, which avoids deadlocks).
+        cursor.execute(
+            "SELECT capacity FROM COURSE WHERE course_id = %s FOR UPDATE",
+            (data.course_id,),
+        )
+        result = cursor.fetchone()
 
-    next_student = cursor.fetchone()
+        if not result:
+            raise HTTPException(status_code=404, detail="Course not found")
+
+        capacity = result[0]
+
+        # remove from registration
+        cursor.execute("""
+            DELETE FROM REGISTRATION
+            WHERE student_id = %s AND course_id = %s
+        """, (data.student_id, data.course_id))
+
+        # nothing deleted -> no seat was freed, so promote nobody
+        if cursor.rowcount == 0:
+            raise HTTPException(
+                status_code=404,
+                detail="Student is not registered for this course",
+            )
+
+        # only promote if a seat is actually free now
+        cursor.execute("SELECT COUNT(*) FROM REGISTRATION WHERE course_id = %s", (data.course_id,))
+        count = cursor.fetchone()[0]
+
+        next_student = None
+        if count < capacity:
+            # get next waitlist
+            cursor.execute("""
+                SELECT student_id, semester_id, position FROM WAITLIST
+                WHERE course_id = %s
+                ORDER BY position ASC
+                LIMIT 1
+            """, (data.course_id,))
+            next_student = cursor.fetchone()
+
+        if next_student:
+            sid, sem, pos = next_student
+
+            # promote
+            cursor.execute("""
+                INSERT INTO REGISTRATION (student_id, course_id, semester_id, status)
+                VALUES (%s, %s, %s, 'Registered')
+            """, (sid, data.course_id, sem))
+
+            # remove from waitlist
+            cursor.execute("""
+                DELETE FROM WAITLIST
+                WHERE student_id = %s AND course_id = %s
+            """, (sid, data.course_id))
+
+            # reorder waitlist: everyone behind the promoted student moves up one
+            cursor.execute("""
+                UPDATE WAITLIST
+                SET position = position - 1
+                WHERE course_id = %s AND position > %s
+            """, (data.course_id, pos))
+
+        db.commit()
+
+    except Exception:
+        # undo the DELETE too and release the course lock
+        db.rollback()
+        raise
+    finally:
+        cursor.close()
+        db.close()
 
     if next_student:
-        sid, sem = next_student
-
-        # promote
-        cursor.execute("""
-            INSERT INTO REGISTRATION (student_id, course_id, semester_id, status)
-            VALUES (%s, %s, %s, 'Registered')
-        """, (sid, data.course_id, sem))
-
-        # remove from waitlist
-        cursor.execute("""
-            DELETE FROM WAITLIST
-            WHERE student_id = %s AND course_id = %s
-        """, (sid, data.course_id))
-
-        # reorder waitlist
-        cursor.execute("SET @pos = 0")
-        cursor.execute("""
-            UPDATE WAITLIST
-            SET position = (@pos := @pos + 1)
-            WHERE course_id = %s
-            ORDER BY position
-        """, (data.course_id,))
-
-    db.commit()
-    cursor.close()
-    db.close()
-
-    return {"message": "Dropped + Waitlist Updated"}
+        return {"message": "Dropped. Next waitlisted student promoted", "promoted_student_id": next_student[0]}
+    return {"message": "Dropped", "promoted_student_id": None}
